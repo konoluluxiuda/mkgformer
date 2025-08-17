@@ -1,0 +1,9 @@
+logs/
+__pycache__/
+output/
+MRE/data/
+MNER/data/
+*.gz
+ckpt/
+pretrained_ckpt/
+MKG/dataset/
