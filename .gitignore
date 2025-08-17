@@ -7,3 +7,6 @@ MNER/data/
 ckpt/
 pretrained_ckpt/
 MKG/dataset/
+*.tar
+*.zip
+*.7z
