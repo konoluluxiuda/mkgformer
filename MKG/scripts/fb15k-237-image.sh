@@ -19,6 +19,6 @@ python main.py --gpus "0," --max_epochs=12  --num_workers=4 \
    --eval_batch_size 128 \
    --max_seq_length 64 \
    --lr 4e-5 \
-   --checkpoint your_checkpoint_path
+   --checkpoint output/FB15k-237/epoch=6-step=1637-Eval/hits10=1.00.ckpt
 
 
