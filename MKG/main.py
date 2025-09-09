@@ -4,29 +4,31 @@ import argparse
 import importlib
 import numpy as np
 import pytorch_lightning as pl
+from transformers import BertConfig, BertModel
 from models.modeling_clip import CLIPModel
-from transformers import CLIPConfig, BertConfig, BertModel
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-# In order to ensure reproducible experiments, we must set random seeds.
+
 
 def _import_class(module_and_class_name: str) -> type:
-    """Import class from a module, e.g. 'text_recognizer.models.MLP'"""
+    """动态导入类"""
     module_name, class_name = module_and_class_name.rsplit(".", 1)
     module = importlib.import_module(module_name)
-    class_ = getattr(module, class_name)
-    return class_
+    return getattr(module, class_name)
 
 
 def _setup_parser():
-    """Set up Python's ArgumentParser with data, model, trainer, and other arguments."""
+    """初始化 ArgumentParser"""
+    import argparse
+    import pytorch_lightning as pl
+
     parser = argparse.ArgumentParser(add_help=False)
 
-    # Add Trainer specific arguments, such as --max_epochs, --gpus, --precision
-    trainer_parser = pl.Trainer.add_argparse_args(parser)
-    trainer_parser._action_groups[1].title = "Trainer Args"  # pylint: disable=protected-access
-    parser = argparse.ArgumentParser(add_help=False, parents=[trainer_parser])
+    # Trainer args
+    parser = pl.Trainer.add_argparse_args(parser)
+    parser._action_groups[-1].title = "Trainer Args"
 
-    # Basic arguments
+    # 自定义 args
     parser.add_argument("--wandb", action="store_true", default=False)
     parser.add_argument("--litmodel_class", type=str, default="TransformerLitModel")
     parser.add_argument("--seed", type=int, default=7)
@@ -36,22 +38,30 @@ def _setup_parser():
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--task_name", type=str, default=None)
 
-    # Get the data and model classes, so that we can add their specific arguments
+    # 支持 KGC 数据模块参数
+    parser.add_argument("--model_name_or_path", type=str, default="roberta-base")
+    parser.add_argument("--data_dir", type=str, default="dataset")
+    parser.add_argument("--max_seq_length", type=int, default=256)
+    parser.add_argument("--eval_batch_size", type=int, default=8)
+    parser.add_argument("--overwrite_cache", action="store_true", default=False)
+    # parser.add_argument("--batch_size", type=int, default=8)
+    # parser.add_argument("--pretrain", action="store_true", default=False)
+    # parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--warm_up_radio",type=float,default=0.1,help="Warmup ratio for linear scheduler (e.g., 0.1 means 10% of training steps are warmup)")
+
+    # 临时解析获取 data/model 类名
     temp_args, _ = parser.parse_known_args()
     data_class = _import_class(f"data.{temp_args.data_class}")
     model_class = _import_class(f"models.{temp_args.model_class}")
     lit_model_class = _import_class(f"lit_models.{temp_args.litmodel_class}")
 
-    # Get data, model, and LitModel specific arguments
-    data_group = parser.add_argument_group("Data Args")
-    data_class.add_to_argparse(data_group)
-
-    model_group = parser.add_argument_group("Model Args")
+    # 注册 data/model/lit_model 特有参数
+    if hasattr(data_class, "add_to_argparse"):
+        data_class.add_to_argparse(parser)
     if hasattr(model_class, "add_to_argparse"):
-        model_class.add_to_argparse(model_group)
-
-    lit_model_group = parser.add_argument_group("LitModel Args")
-    lit_model_class.add_to_argparse(lit_model_group)
+        model_class.add_to_argparse(parser)
+    if hasattr(lit_model_class, "add_to_argparse"):
+        lit_model_class.add_to_argparse(parser)
 
     parser.add_argument("--help", "-h", action="help")
     return parser
@@ -62,91 +72,90 @@ def main():
     args = parser.parse_args()
     print(args)
 
+    # 固定随机种子
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     pl.seed_everything(args.seed)
 
-    data_class = _import_class(f"data.{args.data_class}")               # Dataset
-    model_class = _import_class(f"models.{args.model_class}")           # Model
-    litmodel_class = _import_class(f"lit_models.{args.litmodel_class}") # Lit_model
+    # 动态导入类
+    data_class = _import_class(f"data.{args.data_class}")
+    model_class = _import_class(f"models.{args.model_class}")
+    lit_model_class = _import_class(f"lit_models.{args.litmodel_class}")
 
-    # load pretrained visual and textual configs, models
-    vision_config = CLIPConfig.from_pretrained('/opt/workspace/MKGformer/MKG/models/clip-vit-base-patch32').vision_config
-    text_config = BertConfig.from_pretrained('bert-base-uncased')
-    bert = BertModel.from_pretrained('bert-base-uncased')
+    # ===== 加载预训练模型 =====
+    # 文本: 所有实体都有文本 → BERT
+    text_config = BertConfig.from_pretrained('/opt/workspace/MKGformer/MKG/models/bert-base-uncased')
+    bert_model = BertModel.from_pretrained('/opt/workspace/MKGformer/MKG/models/bert-base-uncased')
+
+    # 图像: 只有 HERB 有图像 → CLIP ViT
     clip_model = CLIPModel.from_pretrained('/opt/workspace/MKGformer/MKG/models/clip-vit-base-patch32')
     clip_vit = clip_model.vision_model
-    
+    vision_config = clip_model.config.vision_config
     vision_config.device = 'cpu'
+
+    # ===== 构造任务模型 =====
     model = model_class(vision_config, text_config)
-    clip_model_dict = clip_vit.state_dict()
-    text_model_dict = bert.state_dict()
 
-    def load_state_dict():
-        """Load bert and vit pretrained weights"""
-        vision_names, text_names = [], []
-        model_dict = model.state_dict()
-        for name in model_dict:
-            if 'vision' in name:
-                clip_name = name.replace('vision_', '').replace('model.', '').replace('unimo.', '')
-                if clip_name in clip_model_dict:
-                    vision_names.append(clip_name)
-                    model_dict[name] = clip_model_dict[clip_name]
-            elif 'text' in name:
-                text_name = name.replace('text_', '').replace('model.', '').replace('unimo.', '')
-                if text_name in text_model_dict:
-                    text_names.append(text_name)
-                    model_dict[name] = text_model_dict[text_name]
-        assert len(vision_names) == len(clip_model_dict) and len(text_names) == len(text_model_dict), \
-                    (len(vision_names), len(text_names), len(clip_model_dict), len(text_model_dict))
-        model.load_state_dict(model_dict)
-        print('Load model state dict successful.')
-    load_state_dict()
+    # ===== 加载预训练权重到模型 =====
+    model_dict = model.state_dict()
+    clip_state_dict = clip_vit.state_dict()
+    text_state_dict = bert_model.state_dict()
 
+    for name in model_dict:
+        if 'vision' in name:
+            clip_name = name.replace('vision_', '').replace('model.', '')
+            if clip_name in clip_state_dict:
+                model_dict[name] = clip_state_dict[clip_name]
+        elif 'text' in name:
+            text_name = name.replace('text_', '').replace('model.', '')
+            if text_name in text_state_dict:
+                model_dict[name] = text_state_dict[text_name]
+
+    model.load_state_dict(model_dict, strict=False)
+    print("✅ Herb(图像+文本) / 其他实体(文本) 的预训练权重加载成功")
+
+    # ===== 数据 =====
     data = data_class(args, model)
-    tokenizer = data.tokenizer
+    tokenizer = getattr(data, "tokenizer", None)
 
-    lit_model = litmodel_class(args=args, model=model, tokenizer=tokenizer, data_config=data.get_config())
+    # ===== Lightning 模型 =====
+    lit_model = lit_model_class(args=args, model=model, tokenizer=tokenizer, data_config=data.get_config())
     if args.checkpoint:
         lit_model.load_state_dict(torch.load(args.checkpoint, map_location="cpu")["state_dict"])
 
+    # Logger & Callbacks
     logger = pl.loggers.TensorBoardLogger("training/logs")
     if args.wandb:
-        logger = pl.loggers.WandbLogger(project="kgc_bert", name=args.data_dir.split("/")[-1])
+        logger = pl.loggers.WandbLogger(project="kgc_herb", name=args.data_dir.split("/")[-1])
         logger.log_hyperparams(vars(args))
 
     metric_name = "Eval/hits10"
-
-    early_callback = pl.callbacks.EarlyStopping(monitor="Eval/mrr", mode="max", patience=5)
-    model_checkpoint = pl.callbacks.ModelCheckpoint(monitor=metric_name, mode="max",
-        filename=args.data_dir.split("/")[-1] + '/{epoch}-{Eval/hits10:.2f}-{Eval/hits1:.2f}' if not args.pretrain else args.data_dir.split("/")[-1] + '/{epoch}-{step}-{Eval/hits10:.2f}',
+    early_stop = pl.callbacks.EarlyStopping(monitor="Eval/mrr", mode="max", patience=5)
+    checkpoint_cb = pl.callbacks.ModelCheckpoint(
+        monitor=metric_name,
+        mode="max",
+        filename=args.data_dir.split("/")[-1] + '/{epoch}-{Eval/hits10:.2f}-{Eval/hits1:.2f}',
         dirpath="output",
-        save_weights_only=True,
+        save_weights_only=True
     )
-    callbacks = [early_callback, model_checkpoint]
+    callbacks = [early_stop, checkpoint_cb]
 
-    trainer = pl.Trainer.from_argparse_args(args, 
-                                            callbacks=callbacks, 
-                                            logger=logger, 
-                                            default_root_dir="training/logs",)
-    
+    # ===== Trainer =====
+    trainer = pl.Trainer.from_argparse_args(args, callbacks=callbacks, logger=logger, default_root_dir="training/logs")
+
+    # ===== 训练 & 测试 =====
     if "EntityEmbedding" not in lit_model.__class__.__name__:
         trainer.fit(lit_model, datamodule=data)
-        path = model_checkpoint.best_model_path
+        path = checkpoint_cb.best_model_path
         lit_model.load_state_dict(torch.load(path)["state_dict"])
 
     result = trainer.test(lit_model, datamodule=data)
     print(result)
 
-    # _saved_pretrain(lit_model, tokenizer, path)
     if "EntityEmbedding" not in lit_model.__class__.__name__:
-        print("*path"*30)
+        print("*path*"*10)
         print(path)
 
 
-
-
-
 if __name__ == "__main__":
-
     main()
