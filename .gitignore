@@ -1,12 +1,26 @@
-logs/
+# Logs
+logs/binww
+
+# Python cache
 __pycache__/
+
+# Output directories
 output/
+
+# Project-specific data
 MRE/data/
 MNER/data/
-*.gz
+MKG/dataset/
+
+# Checkpoints and pretrained models
 ckpt/
 pretrained_ckpt/
-MKG/dataset/
+
+# Compressed files
+*.gz
 *.tar
 *.zip
 *.7z
+
+# PyTorch 模型文件
+MKG/models/bert-base-uncased/pytorch_model.bin
