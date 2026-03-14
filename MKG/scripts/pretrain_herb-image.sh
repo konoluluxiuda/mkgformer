@@ -1,0 +1,18 @@
+python main.py \
+  --gpus 1 \
+  --max_epochs 20 \
+  --num_workers 2 \
+  --model_name_or_path models/bert-base-chinese \
+  --accumulate_grad_batches 2 \
+  --model_class UnimoKGC \
+  --batch_size 64 \
+  --pretrain 1 \
+  --bce 0 \
+  --check_val_every_n_epoch 1 \
+  --overwrite_cache \
+  --data_dir dataset/HERB \
+  --task_name HERB \
+  --eval_batch_size 96 \
+  --max_seq_length 128 \
+  --lr 5e-4 \
+  --warm_up_radio 0.05 \

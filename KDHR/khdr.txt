@@ -1,0 +1,4 @@
+2025-12-30-14_47_38
+lr:  0.0003  rec:  0.007  dropout:  0.0  batchsize:  512  epoch:  200  dev_ratio:  0.2  test_ratio:  0.2
+train_size:  20259 dev_size:  6753 test_size:  6753
+device:  cuda

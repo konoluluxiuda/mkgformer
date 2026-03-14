@@ -1,0 +1,80 @@
+# ======================================
+# Python cache & Environment
+# ======================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.p
+*.log
+.env
+.venv/
+venv/
+env/
+# 屏蔽 Python 离线安装包（防止之前遇到的 .whl 报错）
+*.whl
+*.egg-info/
+dist/
+build/
+
+# ======================================
+# Model weights & Large Binaries (关键：解决 GitHub 100MB 限制)
+# ======================================
+*.pt
+*.pth
+*.bin
+*.h5
+*.ckpt
+*.npy
+*.npz
+# 额外增加模型导出格式
+*.pb
+*.onnx
+*.weights
+
+# 深度屏蔽所有 models 目录下的权重文件，但保留目录结构（可选）
+**/models/**/*.bin
+**/models/**/*.pt
+
+# ======================================
+# Project-specific data & Datasets
+# ======================================
+MRE/data/
+MNER/data/
+# 建议屏蔽整个 dataset 原始数据，只通过脚本下载/解压
+MKG/dataset/
+MKG/data/
+# 屏蔽预处理过程中生成的中间大型索引文件
+*.index
+*.db
+
+# ======================================
+# Logs & Output directories
+# ======================================
+logs/
+output/
+results/
+runs/
+# 屏蔽 Tensorboard 的事件文件
+events.out.tfevents.*
+
+# ======================================
+# IDE & System files
+# ======================================
+.vscode/
+.idea/
+*.DS_Store
+*.swp
+*.bak
+*.tmp
+.ipynb_checkpoints/
+
+# ======================================
+# Compressed files
+# ======================================
+*.gz
+*.tar
+*.zip
+*.7z
+*.rar
