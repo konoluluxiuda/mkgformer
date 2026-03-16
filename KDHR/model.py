@@ -49,8 +49,13 @@ class GCNConv_SS_HH(MessagePassing):
         return x_j
 
 class KDHR(torch.nn.Module):
-    def __init__(self, ss_num, hh_num, sh_num, embedding_dim, batchSize, drop):
+    def __init__(self, ss_num, hh_num, sh_num, embedding_dim, batchSize, drop, kg_dim=27):
         super(KDHR, self).__init__()
+        self.ss_num = ss_num
+        self.hh_num = hh_num
+        self.sh_num = sh_num
+        self.kg_dim = kg_dim
+        self.emb_dim = embedding_dim
         self.batchSize = batchSize
         self.dropout = drop
         self.SH_embedding = torch.nn.Embedding(sh_num, embedding_dim)
@@ -78,7 +83,7 @@ class KDHR(torch.nn.Module):
         # S-S图网络
         self.convSS = GCNConv_SS_HH(embedding_dim, 256)
         # H-H图网络  维度加上嵌入KG特征的维度
-        self.convHH = GCNConv_SS_HH(embedding_dim+27, 256)
+        self.convHH = GCNConv_SS_HH(embedding_dim + kg_dim, 256)
         # self.convHH = GCNConv_SS_HH(embedding_dim, 256)
         # SI诱导层
         # SUM
@@ -89,10 +94,9 @@ class KDHR(torch.nn.Module):
         self.relu = torch.nn.ReLU()
 
     def forward(self, x_SH, edge_index_SH, x_SS, edge_index_SS, x_HH, edge_index_HH, prescription, kgOneHot):
-        # S-H图搭建
-        # 第一层
-        x_SH1 = self.SH_embedding(x_SH.long())
-        x_SH2 = self.convSH_TostudyS_1(x_SH1.float(), edge_index_SH)
+        # S-H图搭建; embedding 输出 [N,1,C] 需 squeeze 成 [N,C] 以适配 PyG MessagePassing
+        x_SH1 = self.SH_embedding(x_SH.long().squeeze(-1)).float()  # [sh_num, emb_dim]
+        x_SH2 = self.convSH_TostudyS_1(x_SH1, edge_index_SH)
         # 第二层
         x_SH6 = self.convSH_TostudyS_2(x_SH2, edge_index_SH)
         # x_SH6 = x_SH6.view(-1, 256)
@@ -101,57 +105,83 @@ class KDHR(torch.nn.Module):
 
         x_SH9 = (x_SH1 + x_SH2 + x_SH6 ) / 3.0
         x_SH9 = self.SH_mlp_1(x_SH9)
-        x_SH9 = x_SH9.view(1195, -1)
+        x_SH9 = x_SH9.view(self.sh_num, -1)
         x_SH9 = self.SH_bn_1(x_SH9)
         x_SH9 = self.SH_tanh_1(x_SH9)
         # SH H
-        x_SH11 = self.SH_embedding(x_SH.long())
-        x_SH22 = self.convSH_TostudyS_1_h(x_SH11.float(), edge_index_SH)
+        x_SH11 = self.SH_embedding(x_SH.long().squeeze(-1)).float()
+        x_SH22 = self.convSH_TostudyS_1_h(x_SH11, edge_index_SH)
         # 第二层
         x_SH66 = self.convSH_TostudyS_2_h(x_SH22, edge_index_SH)
-        # x_SH66 = x_SH66.view(-1, 256)
         # 第三层
         # x_SH77 = self.convSH_TostudyS_3_h(x_SH66, edge_index_SH)
 
         x_SH99 = (x_SH11 + x_SH22 +x_SH66 ) / 3.0
         x_SH99 = self.SH_mlp_1_h(x_SH99)
-        x_SH99 = x_SH99.view(1195, -1)
+        x_SH99 = x_SH99.view(self.sh_num, -1)
         x_SH99 = self.SH_bn_1_h(x_SH99)
         x_SH99 = self.SH_tanh_1_h(x_SH99)
 
         # S-S图搭建
-        x_ss0 = self.SH_embedding(x_SS.long())
-        x_ss1 = self.convSS(x_ss0.float(), edge_index_SS) # S_S图中 s的嵌入
-        x_ss1 = x_ss1.view(390, -1)
+        x_ss0 = self.SH_embedding(x_SS.long().squeeze(-1)).float()
+        x_ss1 = self.convSS(x_ss0, edge_index_SS)  # S_S图中 s的嵌入
+        x_ss1 = x_ss1.view(self.ss_num, -1)
         # H-H图搭建
-        x_hh0 = self.SH_embedding(x_HH.long())
-        x_hh0 = x_hh0.view(-1, 64)
-        x_hh0 = torch.cat((x_hh0.float(), kgOneHot), dim=-1)
-        x_hh1 = self.convHH(x_hh0.float(), edge_index_HH)  # H_H图中 h的嵌入
-        x_hh1 = x_hh1.view(805, -1)
+        x_hh0 = self.SH_embedding(x_HH.long().squeeze(-1)).float()
+        x_hh0 = x_hh0.view(-1, self.emb_dim)
+        x_hh0 = torch.cat((x_hh0, kgOneHot), dim=-1)
+        x_hh1 = self.convHH(x_hh0, edge_index_HH)  # H_H图中 h的嵌入
+        x_hh1 = x_hh1.view(self.hh_num, -1)
         # 信息融合
-        # sum
-        es = x_SH9[:390] + x_ss1  # 1195,1,64  390,1,64
-        eh = x_SH99[390:] + x_hh1 # 805*dim
-        # cat
-        # es = torch.cat((x_SH9[:390], x_ss1), dim=-1)
-        # eh = torch.cat((x_SH99[390:], x_hh1), dim=-1)
-        # SI 集成多个症状为一个症状表示 batch*390 390*dim => batch*dim
-        es = es.view(390,-1)
+        es = x_SH9[:self.ss_num] + x_ss1
+        eh = x_SH99[self.ss_num:] + x_hh1
+        # SI 集成多个症状为一个症状表示 batch*ss_num ss_num*dim => batch*dim
+        es = es.view(self.ss_num, -1)
         e_synd = torch.mm(prescription, es)  # prescription * es
-        # batch*1
         preSum = prescription.sum(dim=1).view(-1, 1)
-        # batch*dim
-        e_synd_norm = e_synd / preSum
+        e_synd_norm = e_synd / (preSum + 1e-9)
         e_synd_norm = self.mlp(e_synd_norm)
         e_synd_norm = e_synd_norm.view(-1, 256)
         e_synd_norm = self.SI_bn(e_synd_norm)
         e_synd_norm = self.relu(e_synd_norm)  # batch*dim
-        # batch*dim dim*805 => batch*805
-        eh = eh.view(805, -1)
+        eh = eh.view(self.hh_num, -1)
         pre = torch.mm(e_synd_norm, eh.t())
 
-        return  pre
+        return pre
+
+    def get_embeddings(self, x_SH, edge_index_SH, x_SS, edge_index_SS, x_HH, edge_index_HH, kgOneHot):
+        """返回 (es, eh) 用于与 MKG 统一评估器对接。es [ss_num, 256], eh [hh_num, 256]"""
+        x_SH1 = self.SH_embedding(x_SH.long().squeeze(-1)).float()
+        x_SH2 = self.convSH_TostudyS_1(x_SH1, edge_index_SH)
+        x_SH6 = self.convSH_TostudyS_2(x_SH2, edge_index_SH)
+        x_SH9 = (x_SH1 + x_SH2 + x_SH6) / 3.0
+        x_SH9 = self.SH_mlp_1(x_SH9)
+        x_SH9 = x_SH9.view(self.sh_num, -1)
+        x_SH9 = self.SH_bn_1(x_SH9)
+        x_SH9 = self.SH_tanh_1(x_SH9)
+
+        x_SH11 = self.SH_embedding(x_SH.long().squeeze(-1)).float()
+        x_SH22 = self.convSH_TostudyS_1_h(x_SH11, edge_index_SH)
+        x_SH66 = self.convSH_TostudyS_2_h(x_SH22, edge_index_SH)
+        x_SH99 = (x_SH11 + x_SH22 + x_SH66) / 3.0
+        x_SH99 = self.SH_mlp_1_h(x_SH99)
+        x_SH99 = x_SH99.view(self.sh_num, -1)
+        x_SH99 = self.SH_bn_1_h(x_SH99)
+        x_SH99 = self.SH_tanh_1_h(x_SH99)
+
+        x_ss0 = self.SH_embedding(x_SS.long().squeeze(-1)).float()
+        x_ss1 = self.convSS(x_ss0, edge_index_SS)
+        x_ss1 = x_ss1.view(self.ss_num, -1)
+
+        x_hh0 = self.SH_embedding(x_HH.long().squeeze(-1)).float()
+        x_hh0 = x_hh0.view(-1, self.emb_dim)
+        x_hh0 = torch.cat((x_hh0, kgOneHot), dim=-1)
+        x_hh1 = self.convHH(x_hh0, edge_index_HH)
+        x_hh1 = x_hh1.view(self.hh_num, -1)
+
+        es = x_SH9[:self.ss_num] + x_ss1
+        eh = x_SH99[self.ss_num:] + x_hh1
+        return es, eh
 
 
 

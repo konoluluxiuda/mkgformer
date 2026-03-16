@@ -29,7 +29,7 @@ def main():
 
     # 2. 特征注入选择 (多模态融合)
     # True: 注入 "性味、归经" Multi-hot 向量 (这是之前 SOTA 的核心)
-    USE_BASE_ATTR = False    
+    USE_BASE_ATTR = True    
 
     # 开启跨模态对比学习
     USE_CROSS_MODAL = False
@@ -37,7 +37,7 @@ def main():
     CROSS_MODAL_WEIGHT = 0.2   
 
     # True: 
-    USE_CHEM_DENSE = False   
+    USE_CHEM_DENSE = True
 
     # =========================================================================
 
