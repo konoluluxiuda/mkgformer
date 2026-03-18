@@ -31,13 +31,25 @@ def main():
     # True: 注入 "性味、归经" Multi-hot 向量 (这是之前 SOTA 的核心)
     USE_BASE_ATTR = True    
 
+    # 2.1 融合策略
+    # add: 原始逐元素相加
+    # gated: 节点级门控融合(结构/属性/化学)
+    FUSION_MODE = 'gated'
+
     # 开启跨模态对比学习
-    USE_CROSS_MODAL = False
+    USE_CROSS_MODAL = True
     # 权重系数
     CROSS_MODAL_WEIGHT = 0.2   
 
+    # 开启属性-化学语义对齐 (Property-Chemical Alignment)
+    USE_PROP_CHEM_ALIGN = True
+    PROP_CHEM_WEIGHT = 0.1
+
     # True: 
     USE_CHEM_DENSE = True
+
+    # True: 融合额外化学指纹特征 (若文件存在)
+    USE_CHEM_FINGERPRINT = False
 
     # =========================================================================
 
@@ -46,8 +58,12 @@ def main():
     print(f"Starting Training on device: {Config.device}")
     print(f"Strategy Config:")
     print(f"  [Graph] Semantic Graph: {USE_SEMANTIC_GRAPH}")
+    print(f"  [Fuse] Fusion Mode: {FUSION_MODE}")
     print(f"  [Feat]  Base Attributes (Property/Meridian): {USE_BASE_ATTR}")
     print(f"  [Feat]  Deep Chemical (BERT/SMILES): {USE_CHEM_DENSE}")
+    print(f"  [SSL]  Cross Modal (Graph-Chem): {USE_CROSS_MODAL}")
+    print(f"  [SSL]  Property-Chem Align: {USE_PROP_CHEM_ALIGN}")
+    print(f"  [Feat] Chem Fingerprint: {USE_CHEM_FINGERPRINT}")
     print(f"{'='*40}\n")
 
     # --- 1. 动态路径调整 ---
@@ -77,7 +93,23 @@ def main():
     if USE_CROSS_MODAL:
         chem_path = os.path.join(Config.DATA_ROOT, 'recommendation_data', 'node_chem_dense.pt')
         if os.path.exists(chem_path):
-            chem_matrix = torch.load(chem_path).to(Config.device)
+            chem_matrix = torch.load(chem_path)
+            if USE_CHEM_FINGERPRINT:
+                fp_path_pt = os.path.join(Config.DATA_ROOT, 'recommendation_data', 'node_chem_fingerprint.pt')
+                fp_path_npy = os.path.join(Config.DATA_ROOT, 'recommendation_data', 'node_chem_fingerprint.npy')
+                fp_feat = None
+                if os.path.exists(fp_path_pt):
+                    fp_feat = torch.load(fp_path_pt)
+                elif os.path.exists(fp_path_npy):
+                    fp_feat = torch.from_numpy(np.load(fp_path_npy)).float()
+
+                if fp_feat is not None:
+                    chem_matrix = torch.cat([chem_matrix, fp_feat], dim=1)
+                    print(f"✅ Loaded Chem Fingerprint and concatenated: {fp_feat.shape}")
+                else:
+                    print("⚠️ Chem Fingerprint enabled but file not found. Using Dense only.")
+
+            chem_matrix = chem_matrix.to(Config.device)
             print(f"✅ Loaded Cross-Modal Chem Matrix: {chem_matrix.shape}")
         else:
             print("⚠️ Chem Matrix not found, Cross-Modal SSL will be disabled.")
@@ -129,7 +161,8 @@ def main():
         num_relations=data_manager.num_relations,
         pretrained_features=None,    # 始终为 None (我们要保持 Random ID Embedding)
         attr_matrix=final_attr_matrix, # 传入拼接好的属性
-        chem_matrix=chem_matrix  # <--- 传入化学矩阵
+        chem_matrix=chem_matrix,  # <--- 传入化学矩阵
+        fusion_mode=FUSION_MODE
     ).to(Config.device)
 
     # 优化器
@@ -181,9 +214,20 @@ def main():
                     unique_herbs = torch.unique(torch.cat([pos, neg]))
                     # 我们用无扰动状态的特征或者 View1 的特征去逼近 Chemical
                     cm_ssl_loss = model.calc_cross_modal_loss(x_view1, unique_herbs)
+
+                # D. 属性-化学语义对齐 Loss (Property-Chem SSL)
+                pc_ssl_loss = torch.tensor(0.0, device=Config.device)
+                if USE_PROP_CHEM_ALIGN:
+                    unique_herbs = torch.unique(torch.cat([pos, neg]))
+                    pc_ssl_loss = model.calc_property_chem_loss(unique_herbs)
                 
                 # 总 Loss
-                loss = bpr_loss + Config.ssl_reg * graph_ssl_loss + CROSS_MODAL_WEIGHT * cm_ssl_loss
+                loss = (
+                    bpr_loss
+                    + Config.ssl_reg * graph_ssl_loss
+                    + CROSS_MODAL_WEIGHT * cm_ssl_loss
+                    + PROP_CHEM_WEIGHT * pc_ssl_loss
+                )
                 
                 loss.backward()
                 optimizer.step()
