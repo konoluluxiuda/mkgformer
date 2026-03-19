@@ -171,6 +171,7 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=Config.lr, weight_decay=Config.weight_decay)
 
     evaluator = Evaluator()
+    save_path = os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pt')
 
     # --- 6. 训练循环 (带早停) ---
     best_f1 = 0.0
@@ -259,7 +260,6 @@ def main():
             if cur_f1 > best_f1:
                 best_f1 = cur_f1
                 no_improve_cnt = 0
-                save_path = os.path.join(Config.MODEL_SAVE_PATH, 'best_model.pt')
                 torch.save(model.state_dict(), save_path)
                 print(f"   >> ⭐ New Best Model! F1@10: {best_f1:.4f}")
             else:
@@ -270,6 +270,31 @@ def main():
                     print(f"\n[Early Stopping] Triggered after {no_improve_cnt*Config.eval_interval} epochs without improvement.")
                     print(f"Training Finished. Best F1@10: {best_f1:.4f}")
                     break
+
+    # --- 8. 训练结束后的最终评估 ---
+    print("\n" + "=" * 50)
+    print("Final HMC_GNN_SSL (NEWHERB) Test Results (same protocol)")
+    print("=" * 50)
+
+    if os.path.exists(save_path):
+        model.load_state_dict(torch.load(save_path, map_location=Config.device))
+    else:
+        print("⚠️ best_model.pt not found, using current model weights.")
+
+    final_results = evaluator.evaluate(
+        model,
+        test_dict,
+        data_manager.herb_indices,
+        edge_index,
+        edge_type
+    )
+
+    print("HMC_GNN_SSL (NEWHERB) Test Results:")
+    for k in Config.top_k:
+        pk = final_results.get(f'Precision@{k}', 0.0)
+        rk = final_results.get(f'Recall@{k}', 0.0)
+        fk = final_results.get(f'F1@{k}', 0.0)
+        print(f"  P@{k}={pk:.4f}  R@{k}={rk:.4f}  F1@{k}={fk:.4f}")
 
 if __name__ == "__main__":
     main()
