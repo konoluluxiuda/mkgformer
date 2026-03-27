@@ -49,7 +49,7 @@ def main():
     USE_CHEM_DENSE = True
 
     # True: 融合额外化学指纹特征 (若文件存在)
-    USE_CHEM_FINGERPRINT = True
+    USE_CHEM_FINGERPRINT = False
 
     # =========================================================================
 
