@@ -51,6 +51,9 @@ def main():
     # True: 融合额外化学指纹特征 (若文件存在)
     USE_CHEM_FINGERPRINT = True
 
+    # True: 使用疾病的中文BERT文本特征，缓解疾病侧的冷启动问题
+    USE_DISEASE_TEXT = False
+
     # =========================================================================
 
     set_seed(Config.seed)
@@ -64,6 +67,7 @@ def main():
     print(f"  [SSL]  Cross Modal (Graph-Chem): {USE_CROSS_MODAL}")
     print(f"  [SSL]  Property-Chem Align: {USE_PROP_CHEM_ALIGN}")
     print(f"  [Feat] Chem Fingerprint: {USE_CHEM_FINGERPRINT}")
+    print(f"  [Feat] Disease Text (BERT): {USE_DISEASE_TEXT}")
     print(f"{'='*40}\n")
 
     # --- 1. 动态路径调整 ---
@@ -146,6 +150,16 @@ def main():
         final_attr_matrix = None
         print("🔹 No external attributes used (Pure Structure Learning).")
 
+    # D. 加载疾病文本特征
+    disease_matrix = None
+    if USE_DISEASE_TEXT:
+        disease_path = os.path.join(Config.DATA_ROOT, 'recommendation_data', 'node_disease_text.pt')
+        if os.path.exists(disease_path):
+            disease_matrix = torch.load(disease_path).to(Config.device)
+            print(f"✅ Loaded Disease Text Matrix: {disease_matrix.shape}")
+        else:
+            print(f"⚠️ Warning: Disease text file not found at {disease_path}")
+
     # --- 4. 准备 DataLoader ---
     train_dataset = HerbRecDataset(train_dict, data_manager.herb_indices)
     train_loader = DataLoader(train_dataset, batch_size=Config.batch_size, shuffle=True)
@@ -162,6 +176,7 @@ def main():
         pretrained_features=None,    # 始终为 None (我们要保持 Random ID Embedding)
         attr_matrix=final_attr_matrix, # 传入拼接好的属性
         chem_matrix=chem_matrix,  # <--- 传入化学矩阵
+        disease_matrix=disease_matrix, # <--- 传入疾病文本矩阵
         fusion_mode=FUSION_MODE
     ).to(Config.device)
 

@@ -6,7 +6,7 @@ from torch_geometric.nn import RGCNConv
 from config import Config
 
 class HMC_GNN_SSL(nn.Module):
-    def __init__(self, num_nodes, num_relations, pretrained_features=None, attr_matrix=None, chem_matrix=None, fusion_mode='add'):
+    def __init__(self, num_nodes, num_relations, pretrained_features=None, attr_matrix=None, chem_matrix=None, disease_matrix=None, fusion_mode='add'):
         super().__init__()
         
         self.emb_dim = Config.input_dim   # 128
@@ -34,6 +34,13 @@ class HMC_GNN_SSL(nn.Module):
             self.register_buffer('chem_matrix', chem_matrix)
             # 对齐到 emb_dim (128)
             self.chem_align = nn.Linear(chem_matrix.size(1), self.emb_dim)
+            
+        self.use_disease = False
+        if disease_matrix is not None:
+            self.use_disease = True
+            self.register_buffer('disease_matrix', disease_matrix)
+            # 对齐到 emb_dim (128)
+            self.disease_align = nn.Linear(disease_matrix.size(1), self.emb_dim)
 
         self.fusion_mode = fusion_mode
         self.use_gated_fusion = self.fusion_mode == 'gated' and self.use_attr and self.use_chem
@@ -108,6 +115,12 @@ class HMC_GNN_SSL(nn.Module):
             w_attr = fusion_w[:, 1:2]
             w_chem = fusion_w[:, 2:3]
             x_fused = w_st * x_st + w_attr * x_se1 + w_chem * x_se2
+
+        if self.use_disease:
+            disease_buf = self.disease_matrix
+            if isinstance(disease_buf, torch.Tensor):
+                x_se3 = self.disease_align(disease_buf)
+                x_fused = x_fused + x_se3
             
         # # 1. 结构特征
         # x_st = self.embedding.weight  # [N, emb_dim]
