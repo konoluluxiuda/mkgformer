@@ -15,7 +15,7 @@ class ResidualGCNBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.gcn = GCNConv(in_channels, out_channels)
-        self.lin = nn.Linear(out_channels, out_channels) # 论文源码中的 Linear 变换
+        self.lin = nn.Linear(out_channels, out_channels)
         self.bn = nn.BatchNorm1d(out_channels)
         
         # 如果输入输出维度不一致，需要投影 Shortcut
@@ -25,121 +25,100 @@ class ResidualGCNBlock(nn.Module):
             self.shortcut = nn.Identity()
 
     def forward(self, x, edge_index):
-        # 1. GCN 聚合
         h = self.gcn(x, edge_index)
-        
-        # 2. 残差连接 (Input + GCN_Output)
-        # 注意: 论文源码逻辑是 x_new = Tanh(BN(Linear(x_old + gcn_out)))
-        # 这里我们做微调以适配 PyG
         res = self.shortcut(x) + h
-        
-        # 3. 变换与激活
         out = self.lin(res)
         out = self.bn(out)
-        out = torch.tanh(out) # 使用 Tanh
+        out = torch.tanh(out)
         return out
 
 class BSGAM_Attention(nn.Module):
     """
     复现 BSGAM 的 Multi-Head Attention Fusion
-    Query = Sum(View1, View2)
-    Key = Value = Concat(View1, View2)
     """
     def __init__(self, hidden_dim, num_heads=4, dropout=0.3):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
-        
-        # MultiheadAttention
-        # embed_dim 指的是 Query 的维度
         self.att = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads, batch_first=True)
-        
-        # 输出层
         self.fc = nn.Linear(hidden_dim, hidden_dim)
         self.bn = nn.BatchNorm1d(hidden_dim)
         self.dropout = nn.Dropout(dropout)
-        
-        # 因为 Key/Value 是拼接的 (Dim*2)，我们需要投影回 Dim 才能放入 MultiheadAttention
-        # 或者我们修改 Query 的维度。
-        # BSGAM 源码逻辑: Q, K, V 都有各自的 Linear 投影。
-        # PyTorch 的 MultiheadAttention 内部自带投影，但要求 Q,K,V 输入维度一致(或者通过 kdim/vdim 指定)。
-        
-        # 为了适配: 我们先将 Concat 后的 K,V 投影回 hidden_dim
         self.kv_proj = nn.Linear(hidden_dim * 2, hidden_dim)
 
     def forward(self, x_view1, x_view2):
-        # x_view1: S-H 图特征 [N, Dim]
-        # x_view2: S-S/H-H 图特征 [N, Dim]
+        query = (x_view1 + x_view2).unsqueeze(1)
+        cat_feat = torch.cat([x_view1, x_view2], dim=-1)
+        kv_feat = self.kv_proj(cat_feat).unsqueeze(1)
         
-        # 1. 构造 Query (Sum)
-        query = (x_view1 + x_view2).unsqueeze(1) # [N, 1, Dim]
-        
-        # 2. 构造 Key/Value (Concat -> Project)
-        # 原始论文是用 Concat 作为 K/V 的源，然后内部投影
-        cat_feat = torch.cat([x_view1, x_view2], dim=-1) # [N, 2*Dim]
-        kv_feat = self.kv_proj(cat_feat).unsqueeze(1)    # [N, 1, Dim]
-        
-        # 3. Attention
-        # PyTorch Attention: forward(query, key, value)
-        attn_out, _ = self.att(query, kv_feat, kv_feat) # [N, 1, Dim]
-        
-        # 4. Residual + Norm (Transformer Block standard)
+        attn_out, _ = self.att(query, kv_feat, kv_feat)
         out = attn_out.squeeze(1)
         out = self.dropout(out)
-        out = self.fc(out) # 论文最后的 FC
-        # 论文里这里似乎没有 Residual 加回 Query，但加了 BN
+        out = self.fc(out)
         out = self.bn(out)
         out = torch.tanh(out)
-        
         return out
 
 # =================================================================
-# 2. 主模型
+# 2. 主模型 (与 train.py 严格对齐模块的拆分图版本)
 # =================================================================
 
 class MultiView_GNN(nn.Module):
-    def __init__(self, num_nodes, attr_matrix=None):
+    def __init__(self, num_nodes, num_relations=12, pretrained_features=None, attr_matrix=None, chem_matrix=None, disease_matrix=None, fusion_mode='add'):
         super().__init__()
         
-        self.emb_dim = Config.input_dim   # 128
-        self.hidden_dim = Config.hidden_dim # 128
+        self.emb_dim = Config.input_dim   
+        self.hidden_dim = Config.hidden_dim 
         
         # 1. 基础 Embedding
         self.embedding = nn.Embedding(num_nodes, self.emb_dim)
         nn.init.xavier_uniform_(self.embedding.weight)
         
-        # 2. 属性注入 (H-H分支专用)
+        # 2. 多模态语义特征维度对齐 (同 HMC_GNN_SSL)
         self.use_attr = False
         if attr_matrix is not None:
             self.use_attr = True
             self.register_buffer('attr_matrix', attr_matrix)
-            self.attr_proj = nn.Linear(attr_matrix.size(1), 64)
-            # 这里的输入维度变化通过 GCN 的 in_channels 适配
-            self.hh_in_dim = self.emb_dim + 64
-        else:
-            self.hh_in_dim = self.emb_dim
+            self.attr_align = nn.Linear(attr_matrix.size(1), self.emb_dim)
 
-        # 3. 三个分支的残差 GCN
-        # S-H Branch (2 layers)
+        self.use_chem = False
+        if chem_matrix is not None:
+            self.use_chem = True
+            self.register_buffer('chem_matrix', chem_matrix)
+            self.chem_align = nn.Linear(chem_matrix.size(1), self.emb_dim)
+            
+        self.use_disease = False
+        if disease_matrix is not None:
+            self.use_disease = True
+            self.register_buffer('disease_matrix', disease_matrix)
+            self.disease_align = nn.Linear(disease_matrix.size(1), self.emb_dim)
+
+        self.fusion_mode = fusion_mode
+        self.use_gated_fusion = self.fusion_mode == 'gated' and self.use_attr and self.use_chem
+        if self.use_gated_fusion:
+            self.gate_st = nn.Linear(self.emb_dim, 1)
+            self.gate_attr = nn.Linear(self.emb_dim, 1)
+            self.gate_chem = nn.Linear(self.emb_dim, 1)
+
+        self.fusion_mlp = nn.Sequential(
+            nn.Linear(self.emb_dim, self.emb_dim),
+            nn.ReLU()
+        )
+
+        # 3. 三个分支的残差 GCN 传播
         self.sh_gcn1 = ResidualGCNBlock(self.emb_dim, self.hidden_dim)
         self.sh_gcn2 = ResidualGCNBlock(self.hidden_dim, self.hidden_dim)
         
-        # S-S Branch (2 layers)
         self.ss_gcn1 = ResidualGCNBlock(self.emb_dim, self.hidden_dim)
         self.ss_gcn2 = ResidualGCNBlock(self.hidden_dim, self.hidden_dim)
         
-        # H-H Branch (2 layers)
-        self.hh_gcn1 = ResidualGCNBlock(self.hh_in_dim, self.hidden_dim)
+        self.hh_gcn1 = ResidualGCNBlock(self.emb_dim, self.hidden_dim)
         self.hh_gcn2 = ResidualGCNBlock(self.hidden_dim, self.hidden_dim)
         
         # 4. Attention Fusion 模块
-        # 专门针对 Herb 和 Disease 分别融合
         self.fusion_disease = BSGAM_Attention(self.hidden_dim)
         self.fusion_herb = BSGAM_Attention(self.hidden_dim)
         
-        # 5. 最终预测层 (MLP)
-        # 融合后的特征维度是 hidden_dim
-        # 如果需要进一步变换
         self.final_mlp = nn.Sequential(
             nn.Linear(self.hidden_dim, self.hidden_dim),
             nn.BatchNorm1d(self.hidden_dim),
@@ -151,71 +130,89 @@ class MultiView_GNN(nn.Module):
         edge_ss = graphs['ss']
         edge_hh = graphs['hh']
         
-        x0 = self.embedding.weight
+        x_st = self.embedding.weight
         
-        # SSL 扰动
+        # === A. 早期节点特征融合 (与 train.py 中 HMC_GNN 完全一样) ===
+        x_fused = x_st
+        x_se1 = None
+        x_se2 = None
+
+        if self.use_attr:
+            x_se1 = self.attr_align(self.attr_matrix)
+            if not self.use_gated_fusion:
+                x_fused = x_fused + x_se1
+                
+        if self.use_chem:
+            x_se2 = self.chem_align(self.chem_matrix)
+            if not self.use_gated_fusion:
+                x_fused = x_fused + x_se2
+
+        if self.use_gated_fusion and x_se1 is not None and x_se2 is not None:
+            w_st = self.gate_st(x_st)
+            w_attr = self.gate_attr(x_se1)
+            w_chem = self.gate_chem(x_se2)
+            weights = F.softmax(torch.cat([w_st, w_attr, w_chem], dim=-1), dim=-1)
+            x_fused = weights[:, 0:1]*x_st + weights[:, 1:2]*x_se1 + weights[:, 2:3]*x_se2
+
+        if self.use_disease:
+            x_se3 = F.relu(self.disease_align(self.disease_matrix))
+            disease_mask = (torch.sum(self.disease_matrix, dim=1) != 0).unsqueeze(1).float()
+            x_fused = x_fused + x_se3 * disease_mask
+            
+        x_input = self.fusion_mlp(x_fused)
+
+        # Edge Dropout 对扰动网络一致生效
         if perturbed and self.training:
-            mask = torch.rand(edge_sh.size(1), device=edge_sh.device) > Config.edge_drop_rate
-            edge_sh = edge_sh[:, mask]
+            mask_sh = torch.rand(edge_sh.size(1), device=edge_sh.device) > Config.edge_drop_rate
+            edge_sh = edge_sh[:, mask_sh]
 
-        # --- Branch 1: S-H (二部图) ---
-        x_sh = self.sh_gcn1(x0, edge_sh)
+        # === B. 独立的子图传播 (核心的消融差异：这里断开了图层级的信息交互) ===
+        x_sh = self.sh_gcn1(x_input, edge_sh)
         x_sh = self.sh_gcn2(x_sh, edge_sh)
-        # BSGAM 论文采用了 Residual 累加所有层，这里 ResidualBlock 内部已经做了
-        # 所以 x_sh 就是最终的 S-H 表示
 
-        # --- Branch 2: S-S (疾病协作) ---
-        x_ss = self.ss_gcn1(x0, edge_ss)
+        x_ss = self.ss_gcn1(x_input, edge_ss)
         x_ss = self.ss_gcn2(x_ss, edge_ss)
 
-        # --- Branch 3: H-H (草药协作 + 属性) ---
-        if self.use_attr:
-            # 论文中是: eh0_kg = eh0 + kgOneHoth0 (Add)
-            # 我们保持之前的 Concat 优势，但在 ResidualBlock 内部会转为 hidden_dim
-            attr_emb = F.relu(self.attr_proj(self.attr_matrix))
-            x_hh_in = torch.cat([x0, attr_emb], dim=-1)
-        else:
-            x_hh_in = x0
-            
-        x_hh = self.hh_gcn1(x_hh_in, edge_hh)
+        x_hh = self.hh_gcn1(x_input, edge_hh)
         x_hh = self.hh_gcn2(x_hh, edge_hh)
 
-        # --- Fusion (Attention) ---
-        # 论文逻辑：
-        # Disease Embedding = Att(Query=SH+SS, Key=SH|SS, Val=SH|SS)
-        # Herb Embedding    = Att(Query=SH+HH, Key=SH|HH, Val=SH|HH)
-        
-        # x_sh 包含了所有节点，但在 S-S 融合时我们只关注 Disease 节点的特征
-        # 但因为是全图操作，我们对所有节点做同样的融合运算
-        
-        # 融合 Disease 视角 (SH + SS)
+        # === C. 顶层视角的单独注意力组合 ===
         x_disease_final = self.fusion_disease(x_sh, x_ss)
-        
-        # 融合 Herb 视角 (SH + HH)
         x_herb_final = self.fusion_herb(x_sh, x_hh)
         
-        # --- 组合最终输出 ---
-        # 对于 Disease 节点，取 x_disease_final
-        # 对于 Herb 节点，取 x_herb_final
-        # 但在矩阵中无法通过索引简单区分（除非我们有 mask）
-        # 简单策略：相加。因为 x_ss 对于 Herb 节点是无效的(孤立)，x_hh 对于 Disease 是无效的
-        # 或者更严谨地，根据 dataset 中的 indices 可以在 loss 计算时取不同的 embedding
-        
-        # 这里为了兼容 evaluator 接口 (返回一个矩阵)，我们简单相加
-        # 更好的做法是：train.py 里取的时候，Disease 取 x_disease_final, Herb 取 x_herb_final
-        # 鉴于我们无法在 forward 里知道哪些 ID 是 Herb 哪些是 Disease
-        # 我们返回一个融合后的 (N, Dim) 矩阵
-        # 假设：x_ss 在 Herb 节点上的值接近噪声/0，x_hh 在 Disease 上同理
-        
         x_final = x_disease_final + x_herb_final
-        
         x_final = self.final_mlp(x_final)
         
         return x_final
 
+    # ---------------- 补充的所有 SSL 辅助函数 ----------------
     def calc_ssl_loss(self, x1, x2, nodes):
         z1 = F.normalize(x1[nodes], dim=1)
         z2 = F.normalize(x2[nodes], dim=1)
         sim = torch.matmul(z1, z2.t()) / Config.ssl_temp
         lbl = torch.arange(len(nodes), device=nodes.device)
         return F.cross_entropy(sim, lbl)
+
+    def calc_cross_modal_loss(self, x_gnn, herb_indices):
+        if not self.use_chem: return torch.tensor(0.0, device=x_gnn.device)
+        z_gnn = F.normalize(x_gnn[herb_indices], dim=1)
+        chem_buf = self.chem_matrix
+        if not isinstance(chem_buf, torch.Tensor):
+            chem_buf = torch.tensor(chem_buf, dtype=torch.float32, device=x_gnn.device)
+        raw_chem_feat = chem_buf[herb_indices]
+        z_chem = F.normalize(self.chem_align(raw_chem_feat), dim=1)
+        sim_matrix = torch.matmul(z_gnn, z_chem.t()) / Config.ssl_temp
+        labels = torch.arange(herb_indices.size(0), device=herb_indices.device)
+        return F.cross_entropy(sim_matrix, labels)
+
+    def calc_property_chem_loss(self, herb_indices):
+        if (not self.use_attr) or (not self.use_chem): return torch.tensor(0.0, device=Config.device)
+        attr_buf = self.attr_matrix
+        chem_buf = self.chem_matrix
+        if (not isinstance(attr_buf, torch.Tensor)) or (not isinstance(chem_buf, torch.Tensor)):
+            return torch.tensor(0.0, device=Config.device)
+        z_attr = F.normalize(self.attr_align(attr_buf[herb_indices]), dim=1)
+        z_chem = F.normalize(self.chem_align(chem_buf[herb_indices]), dim=1)
+        sim_matrix = torch.matmul(z_attr, z_chem.t()) / Config.ssl_temp
+        labels = torch.arange(herb_indices.size(0), device=herb_indices.device)
+        return F.cross_entropy(sim_matrix, labels)

@@ -4,8 +4,8 @@ from config import Config
 
 class SplitGraphDataManager:
     def __init__(self):
-        # 强制使用 paper_graph_data (Top-K Jaccard)，这是目前质量最好的构图
-        self.data_dir = os.path.join(Config.DATA_ROOT, 'paper_graph_data')
+        # 动态使用 Config 里指定的文件夹（保持与 train.py 完全一致的数据源）
+        self.data_dir = Config.REC_DATA_DIR
         
     def load_split_data(self):
         print(f"Loading data from {self.data_dir}...")

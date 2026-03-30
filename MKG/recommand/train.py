@@ -52,7 +52,7 @@ def main():
     USE_CHEM_FINGERPRINT = True
 
     # True: 使用疾病的中文BERT文本特征，缓解疾病侧的冷启动问题
-    USE_DISEASE_TEXT = False
+    USE_DISEASE_TEXT = True
 
     # =========================================================================
 
