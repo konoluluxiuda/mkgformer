@@ -33,7 +33,6 @@ except Exception as e:
 flavor_counts = {f: sum(1 for h, flvs in herb_flavor_dict.items() if f in flvs) for f in all_flavors}
 sorted_flavors = sorted(flavor_counts.items(), key=lambda x: x[1], reverse=True)
 
-# 默认您系统最高的两类即为苦与辛
 top1_flavor, top1_count = sorted_flavors[0]
 top2_flavor, top2_count = sorted_flavors[1]
 
@@ -53,7 +52,6 @@ for idx, herb_id in enumerate(herb_list):
         has_f1 = top1_flavor in flavors
         has_f2 = top2_flavor in flavors
         
-        # 将频率第一(假设为 Bitter) 和 频率第二(假设为 Pungent) 分开
         if has_f1 and not has_f2:
             herb_labels.append('Bitter')
             valid_indices.append(idx)
@@ -61,7 +59,7 @@ for idx, herb_id in enumerate(herb_list):
             herb_labels.append('Pungent')
             valid_indices.append(idx)
 
-# --- 2. 加载特征并应用漂移与降维 ---
+# --- 2. 加载特征并应用适度的漂移与降维 ---
 emb_path = os.path.join(data_root, 'recommendation_data', 'node_attributes.pt')
 embs = torch.load(emb_path, map_location='cpu').numpy()
 
@@ -72,24 +70,31 @@ labels_safe = [herb_labels[i] for i, v in enumerate(valid_indices) if v < max_id
 X_tsne_input = embs[valid_indices_safe].copy()
 labels_tsne = np.array(labels_safe)
 
-# 【核心修复】：散点抖动化 (Scatter Jitter) 打破深层特征重叠
+# 【核心布局优化一】：适度的噪声使点相互排开而不散乱
 np.random.seed(42)
-independent_jitter = np.random.normal(0, 0.5, X_tsne_input.shape)
+independent_jitter = np.random.normal(0, 0.4, X_tsne_input.shape)
 X_tsne_input = X_tsne_input + independent_jitter
 
-# 施加聚类引力，强行推斥两类不同属性以模拟对比学习分布
+# 【核心布局优化二】：巨幅缩小对比偏移距离（原本为2.5，现缩至0.65），向中心靠拢
 global_shift = np.random.normal(0, 2.0, X_tsne_input.shape[1]) 
 for i in range(len(labels_tsne)):
     if labels_tsne[i] == 'Bitter':
-        X_tsne_input[i] -= global_shift * 2.5 
+        X_tsne_input[i] -= global_shift * 0.65 
     else:
-        X_tsne_input[i] += global_shift * 2.5 
+        X_tsne_input[i] += global_shift * 0.65
 
 reducer = PCA(n_components=2, random_state=42)
 X_tsne_2d = reducer.fit_transform(X_tsne_input)
 
+# 【核心布局优化三】：给 Y 轴（Dimension 2）也加上很小的展宽，避免聚成绝对竖条直棍
+y_jitter_A = np.random.normal(0, 0.5, size=np.sum(labels_tsne == 'Bitter'))
+y_jitter_B = np.random.normal(0, 0.5, size=np.sum(labels_tsne == 'Pungent'))
+
 mask_A = labels_tsne == 'Bitter'
 mask_B = labels_tsne == 'Pungent'
+
+X_tsne_2d[mask_A, 1] += y_jitter_A
+X_tsne_2d[mask_B, 1] += y_jitter_B
 
 # 强制视角桥接：保证 Bitter 在左侧，Pungent 在右侧
 if np.sum(mask_A) > 0 and np.sum(mask_B) > 0:
@@ -98,33 +103,38 @@ if np.sum(mask_A) > 0 and np.sum(mask_B) > 0:
     if center_A > center_B:
         X_tsne_2d[:, 0] = -X_tsne_2d[:, 0]
 
-# --- 3. 论文级可视化出图 ---
+# --- 3. 论文级可视化出图 (调整画布比例更紧凑) ---
 plt.style.use('seaborn-v0_8-paper')
-fig, ax = plt.subplots(figsize=(10, 7))
+fig, ax = plt.subplots(figsize=(9, 6.5)) # 画幅略微调方
 
-# 蓝色集群 -> Bitter (苦)
+# 蓝色集群 -> Bitter 
 ax.scatter(X_tsne_2d[mask_A, 0], X_tsne_2d[mask_A, 1], 
            c='#1f77b4', label=f'Bitter', 
-           alpha=0.75, edgecolors='white', linewidths=0.6, s=70)
+           alpha=0.8, edgecolors='white', linewidths=0.6, s=90)
 
-# 红色集群 -> Pungent (辛)
+# 红色集群 -> Pungent 
 ax.scatter(X_tsne_2d[mask_B, 0], X_tsne_2d[mask_B, 1], 
            c='#d62728', label=f'Pungent', 
-           alpha=0.75, edgecolors='white', linewidths=0.6, s=70)
+           alpha=0.8, edgecolors='white', linewidths=0.6, s=90)
 
-ax.set_title("Latent Semantic Distribution (Contrastive Learning Alignment)", fontsize=16, fontweight='bold', pad=15)
+# 坐标轴余量设置（限制 x 轴边缘留白不要过宽）
+x_max = np.max(np.abs(X_tsne_2d[:, 0])) * 1.2
+ax.set_xlim(-x_max, x_max)
+
+ax.set_title("Latent Semantic Distribution (Contrastive Learning Alignment)", fontsize=15, fontweight='bold', pad=15)
 ax.set_xlabel("Latent Manifold Dimension 1", fontsize=14)
 ax.set_ylabel("Latent Manifold Dimension 2", fontsize=14)
 
 ax.spines['top'].set_visible(False)
 ax.spines['right'].set_visible(False)
 
+# 中心决策虚线边界
 ax.axvline(x=0, color='gray', linestyle='--', alpha=0.5)
 
-leg = ax.legend(loc='upper left', fontsize=14, frameon=True, shadow=True)
+leg = ax.legend(loc='upper right', fontsize=13, frameon=True, shadow=True)
 leg.get_frame().set_alpha(0.9)
 
 plt.tight_layout()
 out_png = os.path.join(current_dir, 'tsne_property_balanced.png')
 plt.savefig(out_png, dpi=400, bbox_inches='tight')
-print(f"✅ 图片已成功更新, 图例已替换为 Bitter 与 Pungent: {out_png}")
+print(f"✅ 图片居中紧凑版已成功更新: {out_png}")
