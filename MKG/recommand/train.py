@@ -21,9 +21,12 @@ def main():
     # =========================================================================
 
     # 1. 图结构选择
-    # True: 使用包含 "文本相似度" 边的图 (preprocess_semantic_graph.py 生成)
-    # False: 使用包含 "协作/共现" 边的图 (preprocess_kge.py 生成)
+    # - USE_TFIDF_GRAPH: 使用 TF-IDF 惩罚图以降低全局枢纽节点权重
+    # - USE_FULL_GRAPH: 绕过 K-pruning (Top-K) 过滤器，保留所有由元路径引导的原始连接
+    # - USE_PAPER_GRAPH: 使用标准的 (Jaccard + Top-K) 论文图数据
     USE_TFIDF_GRAPH = False
+    USE_FULL_GRAPH = False
+    USE_PAPER_GRAPH = True
     USE_SEMANTIC_GRAPH = False
 
 
@@ -39,7 +42,7 @@ def main():
     # 开启跨模态对比学习
     USE_CROSS_MODAL = True
     # 权重系数
-    CROSS_MODAL_WEIGHT = 0.2   
+    CROSS_MODAL_WEIGHT = 0.2
 
     # 开启属性-化学语义对齐 (Property-Chemical Alignment)
     USE_PROP_CHEM_ALIGN = True
@@ -73,13 +76,18 @@ def main():
     # --- 1. 动态路径调整 ---
     if USE_TFIDF_GRAPH:
         print(">>> [Experiment] Loading TF-IDF GRAPH (Anti-Hub Strategy)...")
-        # 指向刚才生成的数据目录
         Config.REC_DATA_DIR = os.path.join(Config.DATA_ROOT, 'tfidf_graph_data')
+    elif USE_FULL_GRAPH:
+        print(">>> [Experiment] Loading FULL GRAPH (w/o K-pruning)...")
+        Config.REC_DATA_DIR = os.path.join(Config.DATA_ROOT, 'full_graph_data')
+    elif USE_PAPER_GRAPH:
+        print(">>> [Experiment] Loading PAPER GRAPH (Jaccard + Top-K)...")
+        Config.REC_DATA_DIR = os.path.join(Config.DATA_ROOT, 'paper_graph_data')
     elif USE_SEMANTIC_GRAPH:
         print(">>> Loading SEMANTIC GRAPH data...")
         Config.REC_DATA_DIR = os.path.join(Config.DATA_ROOT, 'semantic_data')
     else:
-        print(">>> Loading ORIGINAL COLLABORATIVE GRAPH data...")
+        print(">>> Loading ORIGINAL COLLABORATIVE GRAPH data (from preprocess_kge)...")
         Config.REC_DATA_DIR = os.path.join(Config.DATA_ROOT, 'recommendation_data')
         
     # --- 2. 加载图结构数据 ---
