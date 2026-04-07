@@ -95,6 +95,28 @@ def main():
     try:
         # load_data 会读取 REC_DATA_DIR 下的 edge_index, edge_type, rec_data.pt
         edge_index, edge_type, train_dict, test_dict = data_manager.load_data()
+        
+        # [NEW] 动态生成验证集 (Dynamic Validation Split) 
+        # 将原始的 20% test 按患者切分为独立的 10% Val 和 10% Test
+        import random
+        val_dict = {}
+        new_test_dict = {}
+        all_test_users = list(test_dict.keys())
+        
+        # 强制排序后打乱以确保可复现性
+        all_test_users.sort() 
+        random.seed(Config.seed)
+        random.shuffle(all_test_users)
+        
+        half_idx = len(all_test_users) // 2
+        for u in all_test_users[:half_idx]:
+            val_dict[u] = test_dict[u]
+        for u in all_test_users[half_idx:]:
+            new_test_dict[u] = test_dict[u]
+            
+        test_dict = new_test_dict # 重置 test_dict 为真正独立的 10% 测试集
+        print(f"✅ Data Split completed -> Train users: {len(train_dict)}, Val users: {len(val_dict)}, Test users: {len(test_dict)}")
+        
     except FileNotFoundError as e:
         print(f"❌ Error loading graph data: {e}")
         print("Please run 'preprocess_kge.py' or 'preprocess_semantic_graph.py' first.")
@@ -260,14 +282,14 @@ def main():
             
         avg_loss = total_loss / len(train_loader)
         
-        # --- 7. 评估与早停 ---
+        # --- 7. 评估与早停 (使用验证集 Val Set) ---
         if (epoch + 1) % Config.eval_interval == 0:
             print(f"Epoch {epoch+1} | Loss: {avg_loss:.4f}")
             
-            # 评估
+            # 使用 val_dict 进行评估
             results = evaluator.evaluate(
                 model, 
-                test_dict, 
+                val_dict, 
                 data_manager.herb_indices, 
                 edge_index, 
                 edge_type
@@ -275,7 +297,7 @@ def main():
             
             # 格式化输出
             res_str = " | ".join([f"{k}: {v:.4f}" for k, v in results.items() if 'F1' in k])
-            print(f"   >> Test Metrics: {res_str}")
+            print(f"   >> [Validation] Metrics: {res_str}")
             
             cur_f1 = results['F1@10']
             
