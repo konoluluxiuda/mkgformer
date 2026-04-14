@@ -26,12 +26,12 @@ VALID_RELATIONS = {
 # 策略：Jaccard 阈值用于过滤"不相关"的，Top-K 用于过滤"过于泛化"的
 
 # H-H: 两个药必须有 45% 重叠，且只保留最相似的 10 个
-MIN_COOC_HERB = 0.45     
+MIN_COOC_HERB = 0.8     
 TOP_K_HERB = 10
 
 # S-S: 两个病必须有 50% 重叠，且只保留最相似的 15 个
 # (Top-K 在这里对抗"人参效应"非常关键)
-MIN_COOC_DISEASE = 0.5   
+MIN_COOC_DISEASE = 0.8   
 TOP_K_DISEASE = 15
 
 # =================================================================

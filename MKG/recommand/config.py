@@ -22,14 +22,14 @@ class Config:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     seed = 42
     
-    epochs = 500
+    epochs = 800
     batch_size = 1024
     lr = 1e-3
     weight_decay = 1e-5
     
     # 早停参数
     eval_interval = 2
-    patience = 25          # 稍微给多一点耐心
+    patience = 50          # 稍微给多一点耐心
     
     # ------------------ 模型参数 ------------------
     # [修改] 回归基础维度
