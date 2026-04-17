@@ -9,7 +9,7 @@ from collections import defaultdict
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MKG_DIR = os.path.dirname(CURRENT_DIR)
 DATA_ROOT = os.path.join(MKG_DIR, 'dataset', 'NEWHERB')
-REC_DIR = os.path.join(DATA_ROOT, 'recommendation_data')
+REC_DIR = os.path.join(DATA_ROOT, 'paper_graph_data')
 OUT_DIR = os.path.join(DATA_ROOT, 'kdhr_newherb')
 KG_DIM = 27
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -21,7 +21,7 @@ def main():
     edge_type_path = os.path.join(REC_DIR, 'edge_type.pt')
 
     if not os.path.exists(rec_path):
-        raise FileNotFoundError(f"请先运行 preprocess_kge.py 生成 {REC_DIR} 下的 rec_data.pt")
+        raise FileNotFoundError(f"请先运行 preprocess_paper_graph.py 生成 {REC_DIR} 下的 rec_data.pt")
 
     rec_data = torch.load(rec_path)
     edge_index = torch.load(edge_index_path)

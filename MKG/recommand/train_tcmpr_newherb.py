@@ -13,7 +13,7 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MKG_DIR = os.path.dirname(CURRENT_DIR)
 DATA_ROOT = os.path.join(MKG_DIR, 'dataset', 'NEWHERB')
 KDHR_DATA_DIR = os.path.join(DATA_ROOT, 'kdhr_newherb')
-REC_DATA_DIR = os.path.join(DATA_ROOT, 'recommendation_data')
+REC_DATA_DIR = os.path.join(DATA_ROOT, 'paper_graph_data')
 
 TCMPR_CKPT = os.path.join(CURRENT_DIR, 'checkpoints', 'tcmpr_best.pt')
 os.makedirs(os.path.dirname(TCMPR_CKPT), exist_ok=True)
@@ -86,7 +86,7 @@ def load_tcmpr_data(device):
     dense_path = os.path.join(REC_DATA_DIR, 'node_chem_dense.pt')
     if not os.path.exists(dense_path):
         raise FileNotFoundError(
-            f"未找到 {dense_path}。请先生成 recommendation_data/node_chem_dense.pt"
+            f"未找到 {dense_path}。请先生成 paper_graph_data/node_chem_dense.pt"
         )
 
     eval_meta = torch.load(eval_meta_path)
@@ -170,8 +170,33 @@ def main():
     evaluator = Evaluator(k_list=Config.top_k)
     dummy_edge = torch.zeros(2, 0, dtype=torch.long, device=device)
     dummy_type = torch.zeros(0, dtype=torch.long, device=device)
-    test_dict = eval_meta['test_dict']
+    
+    # -------------------------------------------------------------------------
+    # ========================== 关键修改：对齐 train.py 的数据切分 ==========================
+    test_dict_original = eval_meta['test_dict']
     herb_indices = eval_meta['herb_indices']
+    
+    import random
+    val_dict = {}
+    new_test_dict = {}
+    all_test_users = list(test_dict_original.keys())
+    
+    # 强制排序后打乱以确保完全复现 train.py 的划分结果
+    all_test_users.sort() 
+    random.seed(Config.seed)
+    random.shuffle(all_test_users)
+    
+    half_idx = len(all_test_users) // 2
+    for u in all_test_users[:half_idx]:
+        val_dict[u] = test_dict_original[u]
+    for u in all_test_users[half_idx:]:
+        new_test_dict[u] = test_dict_original[u]
+        
+    test_dict = new_test_dict # 重置 test_dict 为真正独立的测试集
+    
+    print(f"✅ Data Split completed -> Val users: {len(val_dict)}, Test users: {len(test_dict)}")
+    # ========================================================================================
+    # -------------------------------------------------------------------------
 
     best_f1 = 0.0
     no_improve_cnt = 0
@@ -204,16 +229,18 @@ def main():
 
         print(f"Epoch {epoch+1} | Loss: {avg_loss:.4f}")
         wrapper = TCMPRWrapper(model, symptom_seq_all, eval_meta, device=device)
-        results = evaluator.evaluate(wrapper, test_dict, herb_indices, dummy_edge, dummy_type)
+        
+        # ==== 修改点：评估时使用 val_dict ====
+        results = evaluator.evaluate(wrapper, val_dict, herb_indices, dummy_edge, dummy_type)
         res_str = " | ".join([f"{k}: {v:.4f}" for k, v in results.items() if "F1" in k])
-        print(f"   >> Test Metrics: {res_str}")
+        print(f"   >> [Validation] Metrics: {res_str}")
 
         cur_f1 = results['F1@10']
         if cur_f1 > best_f1:
             best_f1 = cur_f1
             no_improve_cnt = 0
             torch.save(model.state_dict(), TCMPR_CKPT)
-            print(f"   >> New Best Model! F1@10: {best_f1:.4f}")
+            print(f"   >> ⭐ New Best Model! F1@10: {best_f1:.4f}")
         else:
             no_improve_cnt += 1
             print(f"   >> No improvement. Counter: {no_improve_cnt}/{Config.patience}")
@@ -222,13 +249,14 @@ def main():
                     f"\n[Early Stopping] Triggered after "
                     f"{no_improve_cnt * Config.eval_interval} epochs without improvement."
                 )
-                print(f"Training Finished. Best F1@10: {best_f1:.4f}")
+                print(f"Training Finished. Best F1@10 (Validation): {best_f1:.4f}")
                 break
 
     print("\n" + "=" * 50)
     print("Final TCMPR (NEWHERB) Test Results (same protocol as train.py)")
     print("=" * 50)
 
+    # ==== 最后载入最佳模型，在独立的 test_dict 上进行一次过境最终测试 ====
     model.load_state_dict(torch.load(TCMPR_CKPT, map_location=device))
     wrapper = TCMPRWrapper(model, symptom_seq_all, eval_meta, device=device)
     results = evaluator.evaluate(wrapper, test_dict, herb_indices, dummy_edge, dummy_type)
@@ -239,7 +267,6 @@ def main():
         rk = results.get(f'Recall@{k}', 0)
         fk = results.get(f'F1@{k}', 0)
         print(f"  P@{k}={pk:.4f}  R@{k}={rk:.4f}  F1@{k}={fk:.4f}")
-
 
 if __name__ == '__main__':
     main()
