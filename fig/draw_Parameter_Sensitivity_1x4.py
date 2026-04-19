@@ -4,11 +4,9 @@ import os
 
 # 设置学术画图风格
 plt.style.use('seaborn-v0_8-whitegrid')
-plt.rcParams.update({'font.size': 14, 'font.family': 'sans-serif'})
+plt.rcParams.update({'font.size': 13, 'font.family': 'sans-serif'})
 
-# 改为正方形分布 (2x2)
-fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-axes = axes.flatten()
+fig, axes = plt.subplots(1, 4, figsize=(22, 4.5))
 
 # ==========================================
 # (a) Data for Cutoff Size K
@@ -27,23 +25,19 @@ L_F10 = [0.1668, 0.1712, 0.1751, 0.1714, 0.1683]
 L_F20 = [0.1815, 0.1861, 0.1889, 0.1856, 0.1784]
 
 # ==========================================
-# (c) Data for Temperature \tau
-# 补充了 0.05 和 0.1 以符合倒U型分布，0.2 为最优点
+# (c) Data for Temperature \tau (Empty for now)
 # ==========================================
-T_vals = ['0.05', '0.1', '0.2', '0.5']
-T_F5  = [0.1460, 0.1512, 0.1557, 0.1450]
-T_F10 = [0.1650, 0.1704, 0.1751, 0.1699]
-T_F20 = [0.1810, 0.1855, 0.1889, 0.1853]
+T_vals = ['0.05', '0.1', '0.2', '0.5', '1.0']
+T_F5 = T_F10 = T_F20 = [np.nan] * 5
 
 # ==========================================
-# (d) Data for Dimension d 
+# (d) Data for Dimension d (Empty for now)
 # ==========================================
 D_vals = ['32', '64', '128', '256']
-D_F5  = [0.1461, 0.1472, 0.1557, 0.1514]
-D_F10 = [0.1663, 0.1641, 0.1751, 0.1696]
-D_F20 = [0.1803, 0.1815, 0.1889, 0.1850]
+D_F5 = D_F10 = D_F20 = [np.nan] * 4
 
 def plot_axis(ax, x, y_list, xlabel, title, categorical=False):
+    # Colors for @5, @10, @20
     colors = ['#2ca02c', '#1f77b4', '#ff7f0e'] # Green, Blue, Orange 
     markers = ['s', 'o', '^']
     labels = ['F1@5', 'F1@10', 'F1@20']
@@ -61,22 +55,26 @@ def plot_axis(ax, x, y_list, xlabel, title, categorical=False):
         
     ax.set_title(title, fontsize=16, pad=12, fontweight='bold')
     ax.grid(True, linestyle=':', alpha=0.6)
+    
+    # 填充空数据时的占位提示
+    if np.isnan(y_list[0]).all():
+        ax.text(0.5, 0.5, 'Waiting for Data...', horizontalalignment='center', verticalalignment='center', 
+                transform=ax.transAxes, fontsize=16, color='gray', alpha=0.6)
+        
     return lines
 
-# 绘制四个子图
-lines = plot_axis(axes[0], K_vals, [K_F5, K_F10, K_F20], r'Cutoff Size $K$', r'(a) Effect of Cutoff Size $K$')
-plot_axis(axes[1], L_vals, [L_F5, L_F10, L_F20], r'Contrastive Weight $\lambda$', r'(b) Effect of Weight $\lambda$', categorical=True)
-plot_axis(axes[2], T_vals, [T_F5, T_F10, T_F20], r'Temperature Coefficient $\tau$', r'(c) Effect of Temperature $\tau$', categorical=True)
-plot_axis(axes[3], D_vals, [D_F5, D_F10, D_F20], r'Latent Dimension $d$', r'(d) Effect of Dimension $d$', categorical=True)
+lines = plot_axis(axes[0], K_vals, [K_F5, K_F10, K_F20], 'Cutoff Size $K$', '(a) Effect of Cutoff Size $K$')
+plot_axis(axes[1], L_vals, [L_F5, L_F10, L_F20], 'Contrastive Weight $\lambda$', '(b) Effect of Weight $\lambda$', categorical=True)
+plot_axis(axes[2], T_vals, [T_F5, T_F10, T_F20], r'Temperature Coefficient $\tau$', '(c) Effect of Temperature $\tau$', categorical=True)
+plot_axis(axes[3], D_vals, [D_F5, D_F10, D_F20], 'Latent Dimension $d$', '(d) Effect of Dimension $d$', categorical=True)
 
-# 只保留上方的全局图例
-fig.legend(lines, ['F1@5', 'F1@10', 'F1@20'], loc='upper center', ncol=3, fontsize=16, bbox_to_anchor=(0.5, 1.05), frameon=True, shadow=True)
+# 统一放置一个图例在底部
+fig.legend(lines, ['F1@5', 'F1@10', 'F1@20'], loc='lower center', ncol=3, fontsize=15, bbox_to_anchor=(0.5, -0.08), frameon=True, shadow=True)
 
-# 调整布局，增加上方留白(给图例让位)，增加子图之间的间距
-plt.tight_layout(rect=[0, 0, 1, 0.96], h_pad=2.5, w_pad=2.0)
+plt.tight_layout()
 os.makedirs('fig', exist_ok=True)
-out_png = 'fig/Parameter_Sensitivity_2x2.png'
-out_pdf = 'fig/Parameter_Sensitivity_2x2.pdf'
+out_png = 'fig/Parameter_Sensitivity_1x4.png'
+out_pdf = 'fig/Parameter_Sensitivity_1x4.pdf'
 plt.savefig(out_png, dpi=300, bbox_inches='tight')
 plt.savefig(out_pdf, dpi=300, bbox_inches='tight')
-print(f"✅ 2x2 Parameter Sensitivity plot successfully saved!")
+print(f"✅ Plot updated with F1@5, F1@10, and F1@20.")
