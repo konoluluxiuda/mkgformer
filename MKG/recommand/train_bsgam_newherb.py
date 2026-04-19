@@ -166,33 +166,8 @@ def main():
     evaluator = Evaluator(k_list=Config.top_k)
     dummy_edge = torch.zeros(2, 0, dtype=torch.long, device=device)
     dummy_type = torch.zeros(0, dtype=torch.long, device=device)
-    
-    # -------------------------------------------------------------------------
-    # ========================== 关键修改：对齐 train.py 的数据切分 ==========================
-    test_dict_original = eval_meta['test_dict']
+    test_dict = eval_meta['test_dict']
     herb_indices = eval_meta['herb_indices']
-    
-    import random
-    val_dict = {}
-    new_test_dict = {}
-    all_test_users = list(test_dict_original.keys())
-    
-    # 强制排序后打乱以确保完全复现 train.py 的划分结果
-    all_test_users.sort() 
-    random.seed(Config.seed)
-    random.shuffle(all_test_users)
-    
-    half_idx = len(all_test_users) // 2
-    for u in all_test_users[:half_idx]:
-        val_dict[u] = test_dict_original[u]
-    for u in all_test_users[half_idx:]:
-        new_test_dict[u] = test_dict_original[u]
-        
-    test_dict = new_test_dict # 重置 test_dict 为真正独立的测试集
-    
-    print(f"✅ Data Split completed -> Val users: {len(val_dict)}, Test users: {len(test_dict)}")
-    # ========================================================================================
-    # -------------------------------------------------------------------------
 
     best_f1 = 0.0
     no_improve_cnt = 0
@@ -231,24 +206,21 @@ def main():
 
         avg_loss = train_loss / len(train_loader)
 
-        # --- 使用 val_dict 进行评估与早停 ---
         if (epoch + 1) % Config.eval_interval != 0:
             continue
 
         print(f"Epoch {epoch+1} | Loss: {avg_loss:.4f}")
         wrapper = BSGAMWrapper(model, graph_data, eval_meta, device=device)
-        
-        # ==== 修改点：评估时参考 val_dict ====
-        results = evaluator.evaluate(wrapper, val_dict, herb_indices, dummy_edge, dummy_type)
+        results = evaluator.evaluate(wrapper, test_dict, herb_indices, dummy_edge, dummy_type)
         res_str = " | ".join([f"{k}: {v:.4f}" for k, v in results.items() if "F1" in k])
-        print(f"   >> [Validation] Metrics: {res_str}")
+        print(f"   >> Test Metrics: {res_str}")
 
         cur_f1 = results['F1@10']
         if cur_f1 > best_f1:
             best_f1 = cur_f1
             no_improve_cnt = 0
             torch.save(model.state_dict(), BSGAM_CKPT)
-            print(f"   >> ⭐ New Best Model! F1@10: {best_f1:.4f}")
+            print(f"   >> New Best Model! F1@10: {best_f1:.4f}")
         else:
             no_improve_cnt += 1
             print(f"   >> No improvement. Counter: {no_improve_cnt}/{Config.patience}")
@@ -257,10 +229,9 @@ def main():
                     f"\n[Early Stopping] Triggered after "
                     f"{no_improve_cnt * Config.eval_interval} epochs without improvement."
                 )
-                print(f"Training Finished. Best F1@10 (Validation): {best_f1:.4f}")
+                print(f"Training Finished. Best F1@10: {best_f1:.4f}")
                 break
 
-    # ==== 最终测试在独立的 test_dict 上进行 ====
     print("\n" + "=" * 50)
     print("Final BSGAM (NEWHERB) Test Results (same protocol as train.py)")
     print("=" * 50)
