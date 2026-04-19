@@ -33,9 +33,9 @@ class Config:
     
     # ------------------ 模型参数 ------------------
     # [修改] 回归基础维度
-    input_dim = 128       # 随机 Embedding 的维度
+    input_dim = 256      # 随机 Embedding 的维度
     attr_dim = 64         # [新增] 属性投影后的维度
-    hidden_dim = 128      # GCN 隐层维度
+    hidden_dim = 256      # GCN 隐层维度
     dropout = 0.2         # 建议 0.3 (Baseline 配置)
     
     # ------------------ SSL 参数 ------------------
