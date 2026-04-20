@@ -98,7 +98,7 @@ ax1 = fig.add_subplot(131, projection='3d')
 ax1.scatter(s1_3d[:,0], s1_3d[:,1], s1_3d[:,2], c=colors[0], label=labels[0], alpha=0.8, s=20, marker=markers[0], edgecolors='white', linewidth=0.5)
 ax1.scatter(a1_3d[:,0], a1_3d[:,1], a1_3d[:,2], c=colors[1], label=labels[1], alpha=0.8, s=20, marker=markers[1], edgecolors='white', linewidth=0.5)
 ax1.scatter(c1_3d[:,0], c1_3d[:,1], c1_3d[:,2], c=colors[2], label=labels[2], alpha=0.8, s=20, marker=markers[2], edgecolors='white', linewidth=0.5)
-ax1.set_title('(a) Direct Concat. (w/o SSL Alignment)', fontsize=14, pad=10)
+ax1.set_title('(a) Direct Concatenation (w/o SSL)', fontsize=14, pad=10)
 ax1.view_init(elev=20, azim=45)
 ax1.set_xticks([]); ax1.set_yticks([]); ax1.set_zticks([])
 
@@ -107,7 +107,7 @@ ax2 = fig.add_subplot(132, projection='3d')
 ax2.scatter(s2_3d[:,0], s2_3d[:,1], s2_3d[:,2], c=colors[0], label=labels[0], alpha=0.8, s=20, marker=markers[0], edgecolors='white', linewidth=0.5)
 ax2.scatter(a2_3d[:,0], a2_3d[:,1], a2_3d[:,2], c=colors[1], label=labels[1], alpha=0.8, s=20, marker=markers[1], edgecolors='white', linewidth=0.5)
 ax2.scatter(c2_3d[:,0], c2_3d[:,1], c2_3d[:,2], c=colors[2], label=labels[2], alpha=0.8, s=20, marker=markers[2], edgecolors='white', linewidth=0.5)
-ax2.set_title('(b) Ours (w/ Cross-modal InfoNCE)', fontsize=14, pad=10)
+ax2.set_title('(b) Contrastive Alignment (w/ SSL)', fontsize=14, pad=10)
 ax2.view_init(elev=20, azim=45)
 ax2.set_xticks([]); ax2.set_yticks([]); ax2.set_zticks([])
 
@@ -117,7 +117,7 @@ ax3.scatter(merged_3d[other_idx,0], merged_3d[other_idx,1], merged_3d[other_idx,
 ax3.scatter(merged_3d[mask_A_idx,0], merged_3d[mask_A_idx,1], merged_3d[mask_A_idx,2], c='#1f77b4', label='Bitter', alpha=0.9, s=30, marker='o', edgecolors='white', linewidth=0.5)
 ax3.scatter(merged_3d[mask_B_idx,0], merged_3d[mask_B_idx,1], merged_3d[mask_B_idx,2], c='#d62728', label='Pungent', alpha=0.9, s=30, marker='o', edgecolors='white', linewidth=0.5)
 
-ax3.set_title('(c) Fused Space: Pharmacological Structure', fontsize=14, pad=10)
+ax3.set_title('(c) Latent Space Interpretability (Bitter vs. Pungent)', fontsize=14, pad=10)
 ax3.view_init(elev=20, azim=45)
 ax3.set_xticks([]); ax3.set_yticks([]); ax3.set_zticks([])
 
