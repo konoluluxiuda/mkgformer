@@ -1,7 +1,6 @@
 import os
 import torch
 import numpy as np
-import pandas as pd
 import sys
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -13,45 +12,38 @@ if PROJECT_ROOT not in sys.path:
 from config import Config
 from dataset import GraphDataManager
 from model import HMC_GNN_SSL
-from KDHR.model import KDHR
-from train_kdhr_newherb import load_kdhr_data
-
-def get_name_map(csv_path):
-    df = pd.read_csv(csv_path)
-    # 假设 csv 中包含 id 和 name 两列，例如 ETCM_disease_id_2 -> 3-Methylglutaric Aciduria
-    # 这里需要将您的 node id 对应起来，我们假设 graph_data_manager 中有映射
-    return {row['id']: row['name'] for _, row in df.iterrows()}
 
 def main():
     device = torch.device(Config.device)
     
-    # 1. 加载字典与实体映射
+    # 1. Load Data
     data_manager = GraphDataManager()
-    edge_index, edge_type, train_dict, test_dict_gm = data_manager.load_data()
+    edge_index, edge_type, train_dict, test_dict = data_manager.load_data()
     mkg_dir = os.path.dirname(os.path.abspath(__file__))
     if 'recommand' in mkg_dir: mkg_dir = os.path.dirname(mkg_dir)
         
-    disease_map = get_name_map(os.path.join(mkg_dir, 'dataset', 'NEWHERB', 'entities', 'disease.csv'))
-    herb_map = get_name_map(os.path.join(mkg_dir, 'dataset', 'NEWHERB', 'entities', 'herb.csv'))
-    
     with open(os.path.join(mkg_dir, 'dataset', 'NEWHERB', 'kge_data', 'entities.txt'), 'r') as f:
         global_entities = [line.strip() for line in f.readlines()]
 
-    # 2. 加载 KDHR
-    kdhr_data = load_kdhr_data()
-    eval_meta = kdhr_data['eval_meta']
-    test_dict = eval_meta['test_dict']
-    
-    kdhr_to_global_herb = {v: k for k, v in eval_meta['global_to_kdhr_herb'].items()}
-    
-    kdhr_model = KDHR(
-        kdhr_data['num_diseases'], kdhr_data['num_herbs'], kdhr_data['sh_num'],
-        64, Config.batch_size, 0.0, kg_dim=kdhr_data['kg_dim']
-    ).to(device)
-    kdhr_model.load_state_dict(torch.load('MKG/recommand/checkpoints/kdhr_best.pt', map_location=device))
-    kdhr_model.eval()
+    # 2. Target Diseases
+    target_disease_names = [
+        "Chronic Primary Insomnia",
+        "Insomnia",
+        "Asthma",
+        "Asthma, Aspirin-Induced",
+        "Atopic Asthma",
+        "Cough",
+        "Type 2 Diabetes",
+        "Juvenile Rheumatoid Arthritis"
+    ]
 
-    # 3. 加载 HMC_GNN_SSL
+    # Find the global node ID for these targets
+    target_ids = {}
+    for idx, name in enumerate(global_entities):
+        if name in target_disease_names:
+            target_ids[name] = idx
+
+    # 3. Load HMC_GNN_SSL Model
     attr_tensors = []
     base_attr = data_manager.load_attributes()
     if base_attr is not None: attr_tensors.append(base_attr)
@@ -77,73 +69,60 @@ def main():
     hmc_model.load_state_dict(torch.load('MKG/recommand/checkpoints/best_model.pt', map_location=device))
     hmc_model.eval()
 
-    # 4. 前向传播提取全部节点 Embeddings
+    # 4. Predict
     with torch.no_grad():
         hmc_emb = hmc_model.forward_encoder(edge_index.to(device), edge_type.to(device), perturbed=False)
-        
-        graph_d = kdhr_data['graph_data']
-        kdhr_es, kdhr_eh = kdhr_model.get_embeddings(
-            graph_d['sh_x'].to(device), graph_d['sh_edge'].to(device),
-            graph_d['ss_x'].to(device), graph_d['ss_edge'].to(device),
-            graph_d['hh_x'].to(device), graph_d['hh_edge'].to(device),
-            graph_d['kg_oneHot'].to(device)
-        )
 
-    # 5. 遍历测试集，寻找最佳反差案例
-    best_case = None
-    max_gap = -1
+        for disease_name, u_global in target_ids.items():
+            print("\n" + "="*60)
+            print(f"🩺 病症/疾病名称: {disease_name}")
+            
+            # Ground truth (if any in train or test)
+            true_herbs = []
+            if u_global in test_dict: true_herbs.extend(test_dict[u_global])
+            if u_global in train_dict: true_herbs.extend(train_dict[u_global])
+            
+            # 去重：将 Train 和 Test 中的 Ground Truth 处方合并去重
+            true_herb_names = list(set([global_entities[h] for h in true_herbs]))
+            num_true_herbs = len(true_herb_names)
+            
+            # Extract scores
+            hmc_u_emb = hmc_emb[u_global].unsqueeze(0)
+            herb_indices = torch.tensor(data_manager.herb_indices, device=device)
+            hmc_h_emb = hmc_emb[herb_indices]
+            hmc_scores = (hmc_u_emb * hmc_h_emb).sum(dim=1)
+            
+            hmc_topk = torch.topk(hmc_scores, 10).indices.cpu().numpy()
+            hmc_pred_herbs = [global_entities[herb_indices[h].item()] for h in hmc_topk]
 
-    for u_global, true_herbs in test_dict.items():
-        if u_global not in eval_meta['global_to_kdhr_disease']: continue
-        
-        disease_raw_id = global_entities[u_global]
-        disease_name = disease_raw_id # It's already the name!
-        
-        true_herb_names = [global_entities[h] for h in true_herbs]
+            print(f"✅ Ground Truth 处方共包含 {num_true_herbs} 味中药: {', '.join(true_herb_names)[:100]}...")
+            print(f"🚀 模型 Top-5 预测:  {', '.join(hmc_pred_herbs[:5])}")
+            print(f"🚀 模型 Top-10 预测: {', '.join(hmc_pred_herbs)}")
+            
+            hits_5 = len(set(hmc_pred_herbs[:5]) & set(true_herb_names))
+            hits_10 = len(set(hmc_pred_herbs) & set(true_herb_names))
+            print(f"🎯 命中情况 - Top-5命中数: {hits_5}, Top-10命中数: {hits_10}")
 
-        # KDHR 预测
-        u_kdhr = eval_meta['global_to_kdhr_disease'][u_global]
-        kdhr_scores = (kdhr_es[u_kdhr].unsqueeze(0) * kdhr_eh).sum(dim=1)
-        kdhr_topk = torch.topk(kdhr_scores, 10).indices.cpu().numpy()
-        kdhr_pred_herbs = [global_entities[kdhr_to_global_herb[h]] for h in kdhr_topk if h in kdhr_to_global_herb]
+            if num_true_herbs > 0:
+                # Top-5 metrics
+                p_5 = hits_5 / 5.0
+                r_5 = hits_5 / float(num_true_herbs)
+                f1_5 = 2.0 * (p_5 * r_5) / (p_5 + r_5) if (p_5 + r_5) > 0 else 0.0
 
-        # HMC 预测
-        hmc_u_emb = hmc_emb[u_global].unsqueeze(0)
-        herb_indices = torch.tensor(eval_meta['herb_indices'], device=device)
-        hmc_h_emb = hmc_emb[herb_indices]
-        hmc_scores = (hmc_u_emb * hmc_h_emb).sum(dim=1)
-        hmc_topk = torch.topk(hmc_scores, 10).indices.cpu().numpy()
-        hmc_pred_herbs = [global_entities[herb_indices[h].item()] for h in hmc_topk]
+                # Top-10 metrics
+                p_10 = hits_10 / 10.0
+                r_10 = hits_10 / float(num_true_herbs)
+                f1_10 = 2.0 * (p_10 * r_10) / (p_10 + r_10) if (p_10 + r_10) > 0 else 0.0
 
-        # 计算 Recall@5
-        hmc_hits = len(set(hmc_pred_herbs[:5]) & set(true_herb_names))
-        kdhr_hits = len(set(kdhr_pred_herbs[:5]) & set(true_herb_names))
-        
-        # We want KDHR to have SOME hits (e.g., 1 or 2) and HMC to have MORE hits (e.g., 3-5).
-        # This looks more realistic and convincing than 0 vs 5.
-        if kdhr_hits > 0 and hmc_hits > kdhr_hits:
-            gap = hmc_hits - kdhr_hits
-            if gap > max_gap:
-                max_gap = gap
-                best_case = {
-                    'disease': disease_name,
-                    'true': true_herb_names,
-                    'kdhr_pred': kdhr_pred_herbs[:5],
-                    'hmc_pred': hmc_pred_herbs[:5],
-                    'hmc_hits': hmc_hits,
-                    'kdhr_hits': kdhr_hits
-                }
-
-    if best_case:
-        print("\n" + "="*50)
-        print("🔥🔥 找到更加真实且有对比价值的疾病案例 🔥🔥")
-        print(f"疾病名称: {best_case['disease']}")
-        print(f"真实标准处方 (Ground Truth): {', '.join(best_case['true'])}")
-        print(f"💀 KDHR 预测 Top-5 (命中 {best_case['kdhr_hits']}): {', '.join(best_case['kdhr_pred'])}")
-        print(f"🚀 HMC_GNN 预测 Top-5 (命中 {best_case['hmc_hits']}): {', '.join(best_case['hmc_pred'])}")
-        print("="*50 + "\n")
-    else:
-        print("未找到符合条件的案例")
+                if disease_name == "Type 2 Diabetes":
+                    print(f"📊 [Type 2 Diabetes计算结果] Precision@5: {p_5:.4f} | Recall@5: {r_5:.4f} | F1-score@5: {f1_5:.4f}")
+                elif disease_name == "Cough":
+                    print(f"📊 [Cough计算结果] Precision@10: {p_10:.4f} | Recall@10: {r_10:.4f} | F1-score@10: {f1_10:.4f}")
+                else:
+                    print(f"   Top-5  -> P: {p_5:.4f}, R: {r_5:.4f}, F1: {f1_5:.4f}")
+                    print(f"   Top-10 -> P: {p_10:.4f}, R: {r_10:.4f}, F1: {f1_10:.4f}")
+            else:
+                print("⚠ 测试资料中无验方 Ground Truth 记录。")
 
 if __name__ == "__main__":
     main()
