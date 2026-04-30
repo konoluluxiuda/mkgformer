@@ -227,6 +227,7 @@ def main():
     for epoch in range(Config.epochs):
         model.train()
         total_loss = 0.0
+        torch.cuda.empty_cache() # 每轮开始清空一下显存碎片
         
         # 进度条
         with tqdm(train_loader, desc=f"Epoch {epoch+1}/{Config.epochs}", unit="batch", leave=False) as tepoch:
