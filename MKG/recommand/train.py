@@ -46,7 +46,7 @@ def main():
 
     # 开启属性-化学语义对齐 (Property-Chemical Alignment)
     USE_PROP_CHEM_ALIGN = True
-    PROP_CHEM_WEIGHT = 0.1
+    PROP_CHEM_WEIGHT = 0.5
 
     # True: 
     USE_CHEM_DENSE = True

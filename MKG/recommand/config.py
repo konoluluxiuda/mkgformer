@@ -36,11 +36,11 @@ class Config:
     input_dim = 256      # 随机 Embedding 的维度
     attr_dim = 64         # [新增] 属性投影后的维度
     hidden_dim = 256      # GCN 隐层维度
-    dropout = 0.2         # 建议 0.3 (Baseline 配置)
+    dropout = 0.2         # 建议 0.2(Baseline 配置)
     
     # ------------------ SSL 参数 ------------------
     ssl_temp = 0.2
-    ssl_reg = 0.05         # 可以尝试微调这个 (0.05 ~ 0.2)
+    ssl_reg = 0.01        # 可以尝试微调这个 (0.05 ~ 0.2)
     edge_drop_rate = 0.1
 
     # ------------------ 评估参数 ------------------
